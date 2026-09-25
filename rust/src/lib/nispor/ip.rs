@@ -3,8 +3,8 @@
 use std::str::FromStr;
 
 use crate::{
-    AddressProtocol, InterfaceIpAddr, InterfaceIpv4, InterfaceIpv6,
-    MergedInterface, nispor::mptcp::get_mptcp_flags,
+    AddressFlag, AddressProtocol, AddressScope, InterfaceIpAddr, InterfaceIpv4,
+    InterfaceIpv6, MergedInterface, nispor::mptcp::get_mptcp_flags,
 };
 
 pub(crate) fn np_ipv4_to_nmstate(
@@ -54,7 +54,20 @@ pub(crate) fn np_ipv4_to_nmstate(
                         None
                     },
                     protocol: np_addr.protocol.map(AddressProtocol::from),
-                    ..Default::default()
+                    scope: Some(AddressScope::from(np_addr.scope)),
+                    flags: if np_addr.flags.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            np_addr
+                                .flags
+                                .iter()
+                                .map(|f| AddressFlag::from(*f))
+                                .collect(),
+                        )
+                    },
+                    label: np_addr.label.clone(),
+                    peer: np_addr.peer.clone(),
                 }),
                 Err(e) => {
                     log::warn!(
@@ -129,7 +142,21 @@ pub(crate) fn np_ipv6_to_nmstate(
                         None
                     },
                     protocol: np_addr.protocol.map(AddressProtocol::from),
-                    ..Default::default()
+                    scope: Some(AddressScope::from(np_addr.scope)),
+                    flags: if np_addr.flags.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            np_addr
+                                .flags
+                                .iter()
+                                .map(|f| AddressFlag::from(*f))
+                                .collect(),
+                        )
+                    },
+                    // IFA_LABEL is IPv4-only; IPv6 does not use it.
+                    label: None,
+                    peer: np_addr.peer.map(|p| p.to_string()),
                 }),
                 Err(e) => {
                     log::warn!(
@@ -164,18 +191,15 @@ pub(crate) fn nmstate_ipv4_to_np(
             &nms_merged_iface.merged.base_iface().ipv4,
         )
     {
-        // Compare without query-only protocol, else the kernel-assigned tag
-        // alone marks an address for removal
+        // Compare without query-only fields, else kernel-assigned
+        // attributes alone mark an address for removal
         let des_ips: Vec<InterfaceIpAddr> = nms_des_ipv4
             .addresses
             .as_deref()
             .unwrap_or_default()
             .iter()
             .cloned()
-            .map(|mut a| {
-                a.protocol = None;
-                a
-            })
+            .map(strip_query_only_fields)
             .collect();
 
         for nms_addr in nms_cur_ipv4.addresses.as_deref().unwrap_or_default() {
@@ -184,8 +208,7 @@ pub(crate) fn nmstate_ipv4_to_np(
             if nms_addr.is_protocol_other() {
                 continue;
             }
-            let mut cmp_addr = nms_addr.clone();
-            cmp_addr.protocol = None;
+            let cmp_addr = strip_query_only_fields(nms_addr.clone());
             if !des_ips.contains(&cmp_addr) {
                 np_ip_conf.addresses.push({
                     let mut ip_conf = nispor::IpAddrConf::default();
@@ -224,18 +247,15 @@ pub(crate) fn nmstate_ipv6_to_np(
             &nms_merged_iface.merged.base_iface().ipv6,
         )
     {
-        // Compare without query-only protocol, else the kernel-assigned tag
-        // alone marks an address for removal
+        // Compare without query-only fields, else kernel-assigned
+        // attributes alone mark an address for removal
         let des_ips: Vec<InterfaceIpAddr> = nms_des_ipv6
             .addresses
             .as_deref()
             .unwrap_or_default()
             .iter()
             .cloned()
-            .map(|mut a| {
-                a.protocol = None;
-                a
-            })
+            .map(strip_query_only_fields)
             .collect();
 
         for nms_addr in nms_cur_ipv6.addresses.as_deref().unwrap_or_default() {
@@ -244,8 +264,7 @@ pub(crate) fn nmstate_ipv6_to_np(
             if nms_addr.is_protocol_other() {
                 continue;
             }
-            let mut cmp_addr = nms_addr.clone();
-            cmp_addr.protocol = None;
+            let cmp_addr = strip_query_only_fields(nms_addr.clone());
             if !des_ips.contains(&cmp_addr) {
                 np_ip_conf.addresses.push({
                     let mut ip_conf = nispor::IpAddrConf::default();
@@ -270,4 +289,19 @@ pub(crate) fn nmstate_ipv6_to_np(
         }
     }
     np_ip_conf
+}
+
+/// Strip query-only kernel attributes so that address comparisons only
+/// consider the user-meaningful fields (ip, prefix_length, mptcp_flags).
+pub(crate) fn strip_query_only_fields(
+    mut a: InterfaceIpAddr,
+) -> InterfaceIpAddr {
+    a.protocol = None;
+    a.scope = None;
+    a.flags = None;
+    a.label = None;
+    a.peer = None;
+    a.valid_life_time = None;
+    a.preferred_life_time = None;
+    a
 }

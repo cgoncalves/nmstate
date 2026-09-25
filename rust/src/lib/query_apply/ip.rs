@@ -4,11 +4,17 @@ use crate::{
     Interface, InterfaceIpAddr, InterfaceIpv4, InterfaceIpv6, RouteEntry,
 };
 
-// Protocol is query only, keeping it would break the address equality
-// used by process_allow_extra_address()
+// Query-only kernel attributes must be cleared so that address equality
+// used by process_allow_extra_address() ignores them.
 fn sanitize_addrs_for_verify(addrs: &mut Vec<InterfaceIpAddr>) {
     for addr in addrs.iter_mut() {
         addr.protocol = None;
+        addr.scope = None;
+        addr.flags = None;
+        addr.label = None;
+        addr.peer = None;
+        addr.valid_life_time = None;
+        addr.preferred_life_time = None;
     }
     addrs.sort_unstable();
     addrs.dedup();
